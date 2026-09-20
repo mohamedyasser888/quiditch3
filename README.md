@@ -1,36 +1,179 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 🧹 Quidditch Academy
 
-## Getting Started
+A magical multiplayer Quidditch game built with Next.js, TypeScript, Tailwind CSS, and Supabase.
 
-First, run the development server:
+## 🌟 Features
 
+- **Magical Authentication**: Register and login with your magical name and house
+- **House System**: Choose from Gryffindor, Hufflepuff, Ravenclaw, or Slytherin
+- **Achievements System**: Unlock magical achievements as you progress
+- **Solo Mode**: Control all 7 positions of your team against another solo player
+- **Team Mode**: Join a team of 7 players, each controlling one position
+- **Real-time Room Lobby**: Live updates with Supabase Realtime
+- **Captain System**: Team captains confirm team readiness
+- **Position Selection**: Secure position claiming with database constraints
+- **Magical UI**: Premium fantasy-themed interface with animations
+
+## 🛠️ Tech Stack
+
+- **Frontend**: Next.js 16, React, TypeScript
+- **Styling**: Tailwind CSS
+- **Backend**: Supabase (PostgreSQL, Auth, Realtime)
+- **Security**: Row Level Security (RLS) policies
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+- Node.js 18+ installed
+- Supabase project set up
+
+### Installation
+
+1. Clone the repository:
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+git clone <repository-url>
+cd quiditch
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+2. Install dependencies:
+```bash
+npm install
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+3. Set up environment variables:
+```bash
+cp .env.example .env.local
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+4. Configure your Supabase credentials in `.env.local`:
+```env
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+```
 
-## Learn More
+5. Run database migrations:
+- Go to your Supabase dashboard
+- Navigate to SQL Editor
+- Run the migration files in order from `supabase/migrations/`:
+  - Run every numbered `.sql` migration in ascending order, through
+    `022_game_state_revisions.sql`.
+  - In particular, match completion and the leaderboard require
+    `013_leaderboard.sql` and `014_game_achievements.sql`. Migration 015
+    refreshes Supabase's function schema cache after the new RPC is installed.
 
-To learn more about Next.js, take a look at the following resources:
+6. Start the development server:
+```bash
+npm run dev
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+7. Open [http://localhost:3000](http://localhost:3000) in your browser
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## 📁 Project Structure
 
-## Deploy on Vercel
+```
+quiditch/
+├── src/
+│   ├── app/                    # Next.js app directory
+│   │   ├── login/             # Login page
+│   │   ├── register/          # Registration page
+│   │   ├── home/              # Home dashboard
+│   │   ├── play/              # Play mode selection
+│   │   ├── achievements/      # Achievements page
+│   │   └── room/              # Room system
+│   │       ├── create/        # Create room
+│   │       ├── join/          # Join room
+│   │       └── [roomCode]/    # Room lobby
+│   ├── components/
+│   │   └── ui/                # Magical UI components
+│   └── lib/
+│       └── supabase/          # Supabase client configuration
+├── supabase/
+│   └── migrations/            # Database migrations
+└── public/                    # Static assets
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## 🎮 Gameplay Modes
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### Solo Mode
+- One player controls all 7 positions (Keeper, 3 Chasers, 2 Beaters, Seeker)
+- Maximum 2 players per match
+- Each player controls their complete team
+
+### Team Mode
+- 7 players per team (14 total)
+- Each player controls one position:
+  - 1 Keeper
+  - 3 Chasers
+  - 2 Beaters
+  - 1 Seeker
+- Team captain must confirm team readiness
+
+## 🔐 Security Features
+
+- Row Level Security (RLS) on all tables
+- Secure position claiming with database constraints
+- Captain-only operations protected server-side
+- Unique magical names with normalization
+- Session management with Supabase Auth
+
+## 🎨 UI Components
+
+- `MagicalBackground` - Animated magical background
+- `MagicalCard` - Glassmorphism cards with glow effects
+- `MagicalButton` - Gradient buttons with hover effects
+- `MagicalInput` - Styled form inputs
+- `MagicalDropdown` - Custom dropdown with icons
+- `HouseBadge` - House emblems with colors
+- `PlayerAvatar` - Player display with house
+- `AchievementCard` - Achievement display with rarity
+- `MagicalNavbar` - Navigation with user info
+
+## 📊 Database Schema
+
+### Tables
+- `profiles` - User profiles with magical names and houses
+- `achievements` - Achievement definitions
+- `user_achievements` - User achievement unlocks
+- `rooms` - Game rooms with codes and modes
+- `teams` - Team information per room
+- `team_members` - Team members with positions
+
+### Key Features
+- Unique room codes with format `QUID-XXXX`
+- Position constraints (max per team)
+- Captain assignment and confirmation
+- Real-time subscriptions for live updates
+
+## 🧪 Testing
+
+Test scenarios to verify functionality:
+
+1. **Registration**: Create account with magical name and house
+2. **Login**: Authenticate with magical name
+3. **Solo Room**: Create and join solo room
+4. **Team Room**: Create team room and select positions
+5. **Position Locking**: Test simultaneous position claims
+6. **Captain System**: Verify captain controls and confirmation
+7. **Realtime**: Test live updates in room lobby
+
+## 🚧 Future Development
+
+The actual Quidditch gameplay mechanics will be built in future phases:
+
+- 3D/2D Quidditch pitch
+- Player movement and controls
+- Quaffle, Bludgers, and Golden Snitch
+- Scoring system
+- Match timer
+- Team statistics
+- Match results
+
+## 📝 License
+
+This project is for educational purposes.
+
+## 🤝 Contributing
+
+This is a personal project. Feel free to fork and modify for your own use.
