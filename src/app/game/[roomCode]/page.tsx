@@ -5,6 +5,7 @@ import Image from 'next/image'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { KeyboardHintGroup } from '@/components/ui/KeyboardHint'
+import ToastNotification from '@/components/ui/ToastNotification'
 
 /* ═══════════════════════════════════════════════════════════════════════════
    TYPES & CONSTANTS
@@ -272,6 +273,8 @@ function bludgerTargets(p: Piece): string[] {
   if (p.type !== 'D' || p.row < 1 || p.row > 5) return []
   const ci = COLS.indexOf(p.col)
   const out: string[] = []
+  // Include current square to hit opponents on same square
+  out.push(`${p.col}${p.row}`)
   for (const [dr, dc] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
     for (let step = 1; step <= 5; step++) {
       const row = p.row + dr * step
@@ -298,7 +301,20 @@ function firstBludgerContact(ps: Piece[], attacker: Piece, col: Col, row: number
   const endCol = COLS.indexOf(col)
   const dr = Math.sign(row - attacker.row)
   const dc = Math.sign(endCol - startCol)
-  if ((dr !== 0 && dc !== 0) || (dr === 0 && dc === 0)) return []
+  
+  // Allow diagonal moves? No, bludger only moves in straight lines
+  if (dr !== 0 && dc !== 0) return []
+  
+  // Check starting position (step 0) for opponents on same square
+  const opponentsAtStart = getOcc(ps, attacker.col, attacker.row).filter(piece => piece.team !== attacker.team)
+  if (opponentsAtStart.length) {
+    console.log('[BLUDGER CONTACT] Found opponents on same square:', opponentsAtStart.map(p => p.id))
+    return opponentsAtStart.map(piece => piece.id)
+  }
+  
+  // If targeting same square (dr === 0 && dc === 0), no opponents at start means no hit
+  if (dr === 0 && dc === 0) return []
+  
   for (let step = 1; ; step++) {
     const currentRow = attacker.row + dr * step
     const currentCol = startCol + dc * step
@@ -312,13 +328,24 @@ function firstBludgerContact(ps: Piece[], attacker: Piece, col: Col, row: number
 
 function knockBack(ps: Piece[], target: Piece): Piece[] {
   let row = target.row
+  // Team 1 is knocked back toward their goal zone (row 6, so direction +1)
+  // Team 2 is knocked back toward their goal zone (row 0, so direction -1)
   const direction = target.team === 1 ? 1 : -1
+  console.log('[KNOCKBACK] Hitting piece:', target.id, 'team:', target.team, 'direction:', direction, 'from row:', target.row)
   for (let step = 0; step < 2; step++) {
     const nextRow = row + direction
-    if (nextRow < 1 || nextRow > 5) break
-    if (getOcc(ps.filter(piece => piece.id !== target.id), target.col, nextRow).length >= MAX_PIECES_PER_CELL) break
+    console.log('[KNOCKBACK] Step', step, 'checking row:', nextRow)
+    if (nextRow < 1 || nextRow > 5) {
+      console.log('[KNOCKBACK] Out of bounds, stopping at row:', row)
+      break
+    }
+    if (getOcc(ps.filter(piece => piece.id !== target.id), target.col, nextRow).length >= MAX_PIECES_PER_CELL) {
+      console.log('[KNOCKBACK] Cell full, stopping at row:', row)
+      break
+    }
     row = nextRow
   }
+  console.log('[KNOCKBACK] Final position:', row)
   return ps.map(piece => piece.id === target.id
     ? { ...piece, row, disabledUntilTurn: undefined }
     : piece
@@ -462,10 +489,22 @@ function completeTurn(s: GS, patch: Partial<GS>): GS {
 }
 
 /** Records board-move counters (turn count, snitch spawn, hiding). Snitch encounter timing is handled by evaluateSnitchAfterTurnComplete. */
-function progressAfterMove(s: GS, _movedPiece?: Piece) {
-  const turnCount = s.turnCount + 1
-  const hiddenMoves = s.snitchPhase === 'hiding' ? (s.snitchHiddenMoves ?? 0) + 1 : s.snitchHiddenMoves
+function progressAfterMove(s: GS, movedPiece?: Piece) {
+  // Only increment turnCount if a piece was actually moved (not for bludger hits)
+  const incrementTurnCount = movedPiece !== undefined
+  const turnCount = incrementTurnCount ? s.turnCount + 1 : s.turnCount
+  const hiddenMoves = s.snitchPhase === 'hiding' && incrementTurnCount ? (s.snitchHiddenMoves ?? 0) + 1 : s.snitchHiddenMoves
   const snitchReadyToReturn = s.snitchPhase === 'hiding' && hiddenMoves !== undefined && hiddenMoves >= 4
+
+  console.log('[PROGRESS AFTER MOVE]', {
+    incrementTurnCount,
+    previousTurnCount: s.turnCount,
+    newTurnCount: turnCount,
+    snitchPhase: s.snitchPhase,
+    snitchSpawnThreshold: SNITCH_SPAWN_AFTER_MOVES,
+    shouldSpawn: s.snitchPhase === null && turnCount >= SNITCH_SPAWN_AFTER_MOVES,
+    movedPiece: movedPiece?.id
+  })
 
   if (snitchReadyToReturn) {
     return {
@@ -478,13 +517,15 @@ function progressAfterMove(s: GS, _movedPiece?: Piece) {
     }
   }
 
+  const shouldSpawn = s.snitchPhase === null && turnCount >= SNITCH_SPAWN_AFTER_MOVES
+  if (shouldSpawn) {
+    console.log('[PROGRESS AFTER MOVE] TRIGGERING SNITCH APPEARANCE at turnCount:', turnCount)
+  }
+
   return {
     turnCount,
     snitchHiddenMoves: hiddenMoves,
-    snitchPhase:
-      s.snitchPhase === null && turnCount >= SNITCH_SPAWN_AFTER_MOVES
-        ? 'appearing' as const
-        : s.snitchPhase,
+    snitchPhase: shouldSpawn ? 'appearing' as const : s.snitchPhase,
   }
 }
 
@@ -534,6 +575,8 @@ function reduce(s: GS, a: Act): GS {
         p.id === a.pid ? { ...p, col: a.col, row: a.row } : p
       )
       const moved = pieces.find(p => p.id === a.pid)!
+      
+      console.log('[MOVE] Piece moved:', { id: moved.id, type: moved.type, to: `${a.col}${a.row}`, turnCount: s.turnCount })
       
       // If making a move during bonus turn, clear the bonus state
       const wasBonusMoveActive = s.seekerBonusMoveActive
@@ -589,9 +632,13 @@ function reduce(s: GS, a: Act): GS {
       // Seeker move (first in turn): always offer move-again / end-turn prompt
       if (isSeekerMove) {
         console.log('[SEEKER MOVE] Offering bonus move prompt, turn stays with current player')
+        // Mark the seeker as having moved this turn to prevent re-selection
+        const updatedPieces = pieces.map(p => 
+          p.id === moved.id ? { ...p, disabledUntilTurn: s.turnCount + 1 } : p
+        )
         return applySnitchWaitToState({
           ...s,
-          pieces,
+          pieces: updatedPieces,
           ...moveProgress,
           seekerBonusMoveActive: true,
           revision: bumpRevision(s),
@@ -612,7 +659,16 @@ function reduce(s: GS, a: Act): GS {
     case 'SEEKER_CONTINUE':
       // Player chose to move another piece after seeker move — keep turn, close prompt
       if (!s.seekerBonusMoveActive) return s
-      return { ...s, seekerBonusMoveActive: false, revision: bumpRevision(s) }
+      console.log('[SEEKER_CONTINUE] Bonus move active, clearing to allow other piece movement', {
+        before: s.seekerBonusMoveActive,
+        pieces: s.pieces.map(p => ({ id: p.id, type: p.type, disabledUntilTurn: p.disabledUntilTurn, turnCount: s.turnCount }))
+      })
+      const nextState = { ...s, seekerBonusMoveActive: false, revision: bumpRevision(s) }
+      console.log('[SEEKER_CONTINUE] After clearing:', {
+        after: nextState.seekerBonusMoveActive,
+        pieces: nextState.pieces.map(p => ({ id: p.id, type: p.type, disabledUntilTurn: p.disabledUntilTurn, turnCount: nextState.turnCount }))
+      })
+      return nextState
 
     case 'END_BONUS_TURN':
       // Player chose to end turn after seeker move
@@ -661,9 +717,13 @@ function reduce(s: GS, a: Act): GS {
       // Guard: prevent double-shoot by checking if duel already exists
       if (s.duel && s.duel.attackerId === atk.id) return s
       
+      // ATTACKER_SHOOT doesn't count as a move for snitch timing (it's part of attack sequence)
+      const progress = progressAfterMove(s, undefined)
+      
       // Clear readyToShoot and trigger goal duel; turn ends after duel resolves
       return {
         ...s,
+        ...progress,
         pieces: s.pieces.map(p => 
           p.id === atk.id ? { ...p, readyToShoot: false } : p
         ),
@@ -748,7 +808,8 @@ function reduce(s: GS, a: Act): GS {
       const atk = s.pieces.find(p => p.id === s.combat!.attackerId)
       if (!atk) return s
       
-      const progress = progressAfterMove(s, atk)
+      // Combat resolution doesn't count as a move for snitch timing
+      const progress = progressAfterMove(s, undefined)
       return {
         ...finishMatchTurn(s, s.pieces, progress),
         combat: null,
@@ -773,6 +834,9 @@ function reduce(s: GS, a: Act): GS {
       // Regular goal = 10 points, Streak bonus (2nd consecutive goal) = 20 points total
       const goalPoints = isGoal ? (streakBonus ? 20 : 10) : 0
       
+      // DUEL doesn't count as a move for snitch timing (it's part of attack sequence)
+      const progress = progressAfterMove(s, undefined)
+      
       // Streak logic:
       // - If goal scored: increment streak (or reset to 0 if bonus was earned)
       // - If save: keep current streak (goalkeeper save doesn't reset)
@@ -780,6 +844,7 @@ function reduce(s: GS, a: Act): GS {
       
       return {
         ...s,
+        ...progress,
         duel: { ...d, phase: 'reveal', result: isGoal ? 'goal' : 'save' },
         s1: isGoal && atk.team === 1 ? s.s1 + goalPoints : s.s1,
         s2: isGoal && atk.team === 2 ? s.s2 + goalPoints : s.s2,
@@ -808,9 +873,13 @@ function reduce(s: GS, a: Act): GS {
           pieces: s.pieces.map(p => p.id === atk.id ? { ...p, row: resetRow } : p),
           duel: null,
         }
-        return completeTurn(next, { turn: nextTeam(s.turn) })
+        // DRESET doesn't count as a move for snitch timing
+        const progress = progressAfterMove(s, undefined)
+        return completeTurn({ ...next, ...progress }, { turn: nextTeam(s.turn) })
       }
-      return completeTurn(s, { combat: null, turn: nextTeam(s.turn) })
+      // DRESET doesn't count as a move for snitch timing
+      const progress = progressAfterMove(s, undefined)
+      return completeTurn({ ...s, ...progress }, { combat: null, turn: nextTeam(s.turn) })
     }
 
     case 'ASSIGN_BROOM': {
@@ -854,10 +923,12 @@ function reduce(s: GS, a: Act): GS {
       const targetId = a.targetId ?? s.bludger.hitIds[0]
       if (targetId && !s.bludger.hitIds.includes(targetId)) return s
       const hit = targetId ? s.pieces.find(piece => piece.id === targetId) : undefined
+      console.log('[BLUDGER_RESOLVE] Resolving bludger hit:', { targetId, hitIds: s.bludger.hitIds, hit: hit?.id })
       // Bludger hits don't count as piece moves for snitch delay purposes
       const progress = progressAfterMove(s, undefined)
       let pieces = s.pieces
       if (hit) {
+        console.log('[BLUDGER_RESOLVE] Knocking back piece:', hit.id)
         pieces = knockBack(s.pieces, hit).map(piece => piece.id === hit.id
           ? { ...piece, disabledUntilTurn: progress.turnCount + 1 }
           : piece
@@ -884,14 +955,19 @@ function reduce(s: GS, a: Act): GS {
 
     case 'SNITCH_SPIN':
       // Ignore delayed or duplicate broadcasts from an earlier Snitch cycle.
-      if (s.snitchPhase !== 'appearing' || !FIELD_SQUARES.includes(`${a.col}${a.row}`) || a.squares.length === 0) return s
+      if (s.snitchPhase !== 'appearing' || !FIELD_SQUARES.includes(`${a.col}${a.row}`) || a.squares.length === 0) {
+        console.log('[SNITCH_SPIN] Rejected - phase:', s.snitchPhase, 'valid square:', FIELD_SQUARES.includes(`${a.col}${a.row}`), 'squares length:', a.squares.length)
+        return s
+      }
+      console.log('[SNITCH_SPIN] Transitioning from appearing to spinning with squares:', a.squares)
       return { 
         ...s, 
         snitchPhase: 'spinning', 
         snitchEncounterPending: false,
         snitchSquares: a.squares, 
         snitchAngle: a.angle, 
-        snitchTarget: { col: a.col, row: a.row } 
+        snitchTarget: { col: a.col, row: a.row },
+        revision: bumpRevision(s)
       }
 
     case 'SNITCH_LAND':
@@ -1109,15 +1185,22 @@ function reduce(s: GS, a: Act): GS {
         currentRevision,
         incomingPiecesCount: a.gs.pieces?.length,
         currentPiecesCount: s.pieces.length,
+        incomingTurnCount: a.gs.turnCount,
+        currentTurnCount: s.turnCount,
+        incomingSnitchPhase: a.gs.snitchPhase,
+        currentSnitchPhase: s.snitchPhase,
         matchId: a.gs.matchId,
+        seekerBonusMoveActive: a.gs.seekerBonusMoveActive,
         timestamp: Date.now()
       })
 
       // Accept incoming state if:
       // 1. It has a strictly higher revision, OR
-      // 2. Same revision BUT more or equal pieces (prevents losing optimistic placements)
+      // 2. Same revision BUT more or equal pieces (prevents losing optimistic placements), OR
+      // 3. Current revision is 0 (initial load) - always accept fresh data from database
       const shouldAccept = incomingRevision > currentRevision ||
-                          (incomingRevision === currentRevision && (a.gs.pieces?.length ?? 0) >= s.pieces.length)
+                          (incomingRevision === currentRevision && (a.gs.pieces?.length ?? 0) >= s.pieces.length) ||
+                          currentRevision === 0
 
       // Never revert a completed STAY/SHOOT choice back to the pending choice UI
       const incomingChoiceId = a.gs.attackerScoringChoice
@@ -1131,12 +1214,43 @@ function reduce(s: GS, a: Act): GS {
         return s
       }
       
-      console.log('[REDUCER SYNC] ACCEPTED')
+      console.log('[REDUCER SYNC] ACCEPTED - Syncing with fresh state')
       const result = { ...a.gs, revision: incomingRevision }
+      
+      // CRITICAL: Always preserve the higher turnCount to prevent snitch timing regression
+      // This ensures that if one client has made more moves, the turnCount doesn't get reverted
+      if (a.gs.turnCount > s.turnCount) {
+        result.turnCount = a.gs.turnCount
+      } else if (s.turnCount > a.gs.turnCount) {
+        result.turnCount = s.turnCount
+      }
+      
+      // Also preserve snitch-related state from the more advanced state
+      if (a.gs.turnCount > s.turnCount) {
+        // Incoming state is more advanced, use its snitch state
+        result.snitchPhase = a.gs.snitchPhase
+        result.snitchPos = a.gs.snitchPos
+        result.snitchHiddenMoves = a.gs.snitchHiddenMoves
+        result.snitchHiddenSquare = a.gs.snitchHiddenSquare
+      } else if (s.turnCount > a.gs.turnCount) {
+        // Current state is more advanced, preserve its snitch state
+        result.snitchPhase = s.snitchPhase
+        result.snitchPos = s.snitchPos
+        result.snitchHiddenMoves = s.snitchHiddenMoves
+        result.snitchHiddenSquare = s.snitchHiddenSquare
+      }
+      
       // Update matchId if needed for convergence
       if (shouldUpdateMatchId && a.gs.matchId) {
         result.matchId = a.gs.matchId
       }
+      
+      console.log('[REDUCER SYNC] Final synced state:', {
+        turnCount: result.turnCount,
+        snitchPhase: result.snitchPhase,
+        snitchPos: result.snitchPos
+      })
+      
       return result
 
     default:
@@ -1471,6 +1585,7 @@ function computeWheelSpinAngle(segmentCount: number, chosenIndex: number, fullRo
   const lo = 360 - (chosenIndex + 1) * deg + margin
   const hi = 360 - chosenIndex * deg - margin
   const finalMod = lo + randomFraction() * (hi - lo)
+  console.log('[COMPUTE WHEEL ANGLE]', { segmentCount, chosenIndex, deg, lo, hi, finalMod, fullRotations })
   return 360 * fullRotations + finalMod
 }
 
@@ -1493,11 +1608,16 @@ function shuffleOutcomes(context?: SnitchWheelContext): { labels: string[]; outc
     ]
   }
   
-  // Fisher-Yates shuffle for equal probability
+  console.log('[SHUFFLE OUTCOMES] Before shuffle:', entries.map(e => e.label))
+  
+  // Fisher-Yates shuffle for equal probability (33.33% each)
   for (let i = entries.length - 1; i > 0; i--) {
     const swapIndex: number = randomIndex(i + 1)
+    console.log('[SHUFFLE OUTCOMES] Swapping index', i, 'with', swapIndex)
     ;[entries[i], entries[swapIndex]] = [entries[swapIndex], entries[i]]
   }
+  
+  console.log('[SHUFFLE OUTCOMES] After shuffle:', entries.map(e => e.label))
   return { labels: entries.map(entry => entry.label), outcomes: entries.map(entry => entry.outcome) }
 }
 
@@ -1920,6 +2040,8 @@ export default function GamePage() {
   const [matchRecordError, setMatchRecordError] = useState<string | null>(null)
   const [matchRecordAttempt, setMatchRecordAttempt] = useState(0)
   const [gameStateRoomId, setGameStateRoomId] = useState<string | null>(null)
+  const [achievementToast, setAchievementToast] = useState<{ message: string; type: 'success' } | null>(null)
+  const [achievementCheckRetries, setAchievementCheckRetries] = useState(0)
 
   // Keep one client and one set of channels for the lifetime of this match.
   const supabase   = useMemo(() => createClient(), [])
@@ -2157,6 +2279,7 @@ export default function GamePage() {
         console.log('[SNITCH] Failed to select target square')
         return
       }
+      console.log('[SNITCH] Emitting SNITCH_SPIN with squares:', squares)
       emit({
         kind: 'SNITCH_SPIN',
         squares,
@@ -2164,12 +2287,13 @@ export default function GamePage() {
         col: targetSq[0] as Col,
         row: parseInt(targetSq[1])
       })
-    }, 2500)
+    }, 1500) // Reduced from 2500ms to 1500ms for faster transition
     return () => clearTimeout(t)
   }, [gs.snitchPhase, myTeam, emit])
 
   // Sync local wheel state when SNITCH_SPIN lands in gs (both teams)
   useEffect(() => {
+    console.log('[SNITCH WHEEL SYNC] Phase changed:', gs.snitchPhase, 'squares:', gs.snitchSquares?.length, 'angle:', gs.snitchAngle)
     if (gs.snitchPhase === 'appearing') {
       setSnitchSquares([])
       setSnitchSpin(0)
@@ -2177,6 +2301,7 @@ export default function GamePage() {
       return
     }
     if (gs.snitchPhase === 'spinning' && gs.snitchSquares && gs.snitchAngle !== undefined) {
+      console.log('[SNITCH WHEEL SYNC] Starting wheel with squares:', gs.snitchSquares)
       setSnitchSquares(gs.snitchSquares)
       setSnitchSpin(gs.snitchAngle)
       setSnitchSpinning(true)
@@ -2230,13 +2355,16 @@ export default function GamePage() {
       if (!live.snitchPos || seekersOnSnitch(live.pieces, live.snitchPos).length === 0) return
 
       const { labels, outcomes } = shuffleOutcomes(live.snitchWheelContext)
-      const chosenIdx = randomIndex(outcomes.length)
+      // After shuffle, pick index 0 - the shuffle already guarantees equal probability
+      const chosenIdx = 0
+      const chosenOutcome = outcomes[chosenIdx]
+      console.log('[SNITCH OUTCOME] Chosen outcome:', chosenOutcome, 'at index:', chosenIdx)
       const eventId = `${live.matchId ?? 'match'}-enc-${live.turnCount}-${Date.now()}`
       emit({
         kind: 'SNITCH_OUTCOME_SPIN',
         labels,
         angle: computeWheelSpinAngle(outcomes.length, chosenIdx, 12),
-        outcome: outcomes[chosenIdx],
+        outcome: chosenOutcome,
         eventId,
       })
     }, 900)
@@ -2318,6 +2446,15 @@ export default function GamePage() {
     const snitchCatcher = gs.snitchCatchWinnerId
       ? gs.pieces.find(piece => piece.id === gs.snitchCatchWinnerId)
       : undefined
+    
+    console.log('[MATCH RECORD] Recording match result:', {
+      roomCode,
+      winnerTeam,
+      scores: { t1: gs.s1, t2: gs.s2 },
+      saves: { t1: gs.saves1, t2: gs.saves2 },
+      snitchCatcher: snitchCatcher?.id
+    })
+    
     void supabase.rpc('record_match_result', {
       p_room_code: roomCode,
       p_winner_team: winnerTeam,
@@ -2326,9 +2463,64 @@ export default function GamePage() {
       p_team1_saves: gs.saves1,
       p_team2_saves: gs.saves2,
       p_snitch_team: snitchCatcher?.team ?? null,
-    }).then(({ error }) => {
+    }).then(async ({ error }) => {
       if (!error) {
+        console.log('[MATCH RECORD] Match result saved successfully')
         setMatchRecordStatus('saved')
+        setAchievementCheckRetries(0) // Reset retry counter
+        
+        // Check for newly unlocked achievements
+        try {
+          const { data: { user } } = await supabase.auth.getUser()
+          if (user) {
+            console.log('[ACHIEVEMENT] Checking for newly unlocked achievements for user:', user.id)
+            
+            // Get user's achievements before the match to compare
+            const { data: oldAchievements } = await supabase
+              .from('user_achievements')
+              .select('achievement_id')
+              .eq('user_id', user.id)
+            
+            const oldCount = oldAchievements?.length || 0
+            
+            // Wait a moment for the database to process achievements
+            await new Promise(resolve => setTimeout(resolve, 500))
+            
+            // Get user's achievements after the match
+            const { data: newAchievements } = await supabase
+              .from('user_achievements')
+              .select('achievement_id, achievements(name, icon)')
+              .eq('user_id', user.id)
+            
+            const newCount = newAchievements?.length || 0
+            
+            console.log('[ACHIEVEMENT] Achievement count:', { old: oldCount, new: newCount })
+            
+            if (newAchievements && newCount > oldCount) {
+              // Show toast for newly unlocked achievements
+              const newlyUnlocked = newAchievements.slice(oldCount)
+              newlyUnlocked.forEach((achievement, index) => {
+                // @ts-ignore
+                const achievementName = achievement.achievements?.name
+                if (achievementName) {
+                  console.log('[ACHIEVEMENT] Newly unlocked:', achievementName)
+                  // Show toast for each new achievement with slight delay
+                  setTimeout(() => {
+                    setAchievementToast({
+                      message: `🏆 Achievement Unlocked: ${achievementName}!`,
+                      type: 'success'
+                    })
+                  }, index * 6000) // 6 seconds between toasts
+                }
+              })
+            } else {
+              console.log('[ACHIEVEMENT] No new achievements detected on first check')
+            }
+          }
+        } catch (achievementError) {
+          console.error('[ACHIEVEMENT] Failed to check achievements:', achievementError)
+          // Don't fail the match recording if achievement check fails
+        }
         return
       }
 
@@ -2341,7 +2533,53 @@ export default function GamePage() {
           : `Could not save match results: ${error.message}. Your game progress is safe, but stats may not be recorded.`
       )
     })
-  }, [gs.phase, gs.s1, gs.s2, gs.saves1, gs.saves2, isCaptain, roomCode, matchRecordAttempt]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [gs.phase, gs.s1, gs.s2, gs.saves1, gs.saves2, isCaptain, roomCode, matchRecordAttempt, supabase]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fallback: Retry achievement check if initial check didn't detect new achievements
+  // This handles cases where the database is slow to process achievements
+  useEffect(() => {
+    if (matchRecordStatus !== 'saved' || achievementCheckRetries >= 3) return
+    
+    const retryDelay = 2000 * (achievementCheckRetries + 1) // 2s, 4s, 6s delays
+    
+    const timer = setTimeout(async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) return
+        
+        console.log('[ACHIEVEMENT FALLBACK] Retry attempt:', achievementCheckRetries + 1)
+        
+        const { data: newAchievements } = await supabase
+          .from('user_achievements')
+          .select('achievement_id, achievements(name, icon)')
+          .eq('user_id', user.id)
+        
+        const newCount = newAchievements?.length || 0
+        
+        // If we have achievements now, show them
+        if (newAchievements && newCount > 0) {
+          // We can't know which are new without the old count, so just show the most recent
+          const latestAchievement = newAchievements[newAchievements.length - 1]
+          // @ts-ignore
+          const achievementName = latestAchievement.achievements?.name
+          if (achievementName) {
+            console.log('[ACHIEVEMENT FALLBACK] Found achievement on retry:', achievementName)
+            setAchievementToast({
+              message: `🏆 Achievement Unlocked: ${achievementName}!`,
+              type: 'success'
+            })
+          }
+        }
+        
+        setAchievementCheckRetries(prev => prev + 1)
+      } catch (error) {
+        console.error('[ACHIEVEMENT FALLBACK] Retry failed:', error)
+        setAchievementCheckRetries(prev => prev + 1)
+      }
+    }, retryDelay)
+    
+    return () => clearTimeout(timer)
+  }, [matchRecordStatus, achievementCheckRetries, supabase])
 
   // Fetch one canonical board before subscribing. The database inserts the
   // initial board only once, so every player and spectator starts in sync.
@@ -2355,8 +2593,19 @@ export default function GamePage() {
         // Silent fail - game will sync from other players
         return
       }
+      const loadedState = data.game_state as GS
+      console.log('[INITIAL LOAD] Game state loaded:', {
+        phase: loadedState.phase,
+        piecesCount: loadedState.pieces.length,
+        turn: loadedState.turn,
+        seekerBonusMoveActive: loadedState.seekerBonusMoveActive,
+        revision: loadedState.revision,
+        matchId: loadedState.matchId,
+        timestamp: Date.now()
+      })
       setGameStateRoomId(data.room_id)
-      disp({ kind: 'SYNC', gs: data.game_state as GS })
+      // Force fresh state - always accept the loaded state
+      disp({ kind: 'SYNC', gs: loadedState })
       setSyncReceived(true)
       syncRcvRef.current = true
     })
@@ -2622,6 +2871,12 @@ export default function GamePage() {
       return
     }
     
+    // CRITICAL: Block selecting any piece that was just moved (disabled until next turn)
+    if ((p.disabledUntilTurn ?? -1) >= gs.turnCount) {
+      console.log('[CLICK PIECE] Piece is disabled until next turn')
+      return
+    }
+    
     // If attacker is ready to shoot, don't show normal movement - SHOOT button will be shown separately
     if (p.readyToShoot && p.type === 'A') {
       console.log('[CLICK PIECE] Attacker is ready to shoot, SHOOT button will be shown')
@@ -2630,6 +2885,7 @@ export default function GamePage() {
       return
     }
     
+    console.log('[CLICK PIECE] Selecting piece:', p.id, 'type:', p.type, 'seekerBonusMoveActive:', gs.seekerBonusMoveActive)
     if (selId === p.id) { setSel(null); setMoves(new Set()); setBludgerMode(null); return }
     setBludgerMode(null)
     setSel(p.id)
@@ -3527,12 +3783,14 @@ export default function GamePage() {
           SNITCH OVERLAYS
       ═══════════════════════════════════════════════════════════════════ */}
       {(gs.snitchPhase === 'appearing' || gs.snitchPhase === 'spinning') && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-amber-950/95 backdrop-blur-xl">
-          <div className="text-center w-full px-4">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-amber-950/95 backdrop-blur-xl">
+          <div className="text-center w-full px-4 relative z-[10000]">
             {gs.snitchPhase === 'appearing' ? (
-              <h1 className="text-5xl md:text-6xl font-serif italic font-black text-amber-300 drop-shadow-[0_0_40px_rgba(251,191,36,0.8)] animate-pulse tracking-wide">
-                ✨ The Snitch Has Chosen to Appear ✨
-              </h1>
+              <div className="animate-in fade-in duration-500">
+                <h1 className="text-5xl md:text-6xl font-serif italic font-black text-amber-300 drop-shadow-[0_0_40px_rgba(251,191,36,0.8)] animate-pulse tracking-wide">
+                  ✨ The Snitch Has Chosen to Appear ✨
+                </h1>
+              </div>
             ) : (
               /* spinning phase — squares are guaranteed ready */
               <div className="animate-in fade-in zoom-in duration-700">
@@ -3551,8 +3809,8 @@ export default function GamePage() {
       )}
 
       {gs.snitchPhase === 'encounter' && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-amber-950/95 backdrop-blur-xl">
-          <div className="text-center w-full px-4">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-amber-950/95 backdrop-blur-xl">
+          <div className="text-center w-full px-4 relative z-[10000]">
             <div className="animate-in fade-in zoom-in duration-500">
               <h2 className="text-4xl font-black text-amber-300 mb-2 drop-shadow-[0_0_20px_rgba(251,191,36,0.6)]" dir="rtl">
                 {gs.snitchWheelContext === 'return' ? 'مصير السنيتش بعد الاختفاء' : 'مصير السنيتش بين يدي الباحث'}
@@ -3571,8 +3829,8 @@ export default function GamePage() {
       )}
 
       {gs.snitchPhase === 'catching' && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-amber-950/95 backdrop-blur-xl">
-          <div className="text-center w-full px-4 animate-in fade-in zoom-in duration-500">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-amber-950/95 backdrop-blur-xl">
+          <div className="text-center w-full px-4 animate-in fade-in zoom-in duration-500 relative z-[10000]">
             <h2 className="mb-2 text-4xl font-black text-amber-300 drop-shadow-[0_0_20px_rgba(251,191,36,0.6)]">SEEKER CATCH-OFF</h2>
             <p className="mb-5 text-amber-100/80">Each wheel slot equals one broom-speed point.</p>
             <SnitchWheel
@@ -3685,6 +3943,7 @@ export default function GamePage() {
                 </button>
                 <button
                   onClick={() => {
+                    console.log('[BONUS MOVE] Clicking MOVE ANOTHER PIECE')
                     emit({ kind: 'SEEKER_CONTINUE' })
                     setSel(null)
                     setMoves(new Set())
@@ -3700,6 +3959,18 @@ export default function GamePage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════════════
+          ACHIEVEMENT TOAST NOTIFICATION
+      ═══════════════════════════════════════════════════════════════════ */}
+      {achievementToast && (
+        <ToastNotification
+          message={achievementToast.message}
+          type={achievementToast.type}
+          duration={5000}
+          onClose={() => setAchievementToast(null)}
+        />
       )}
     </div>
   )
