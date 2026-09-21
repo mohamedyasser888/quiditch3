@@ -1996,12 +1996,14 @@ export default function GamePage() {
   const starterTeam = starterParam === '2' ? 2 : (starterParam === '1' ? 1 : 1) // Default to 1 if null
   const tn       = (t: Team) => t === 1 ? t1Name : t2Name
 
+  console.log('[INIT] Starter team from URL:', starterTeam, 'from param:', starterParam)
+
   /* ── State ────────────────────────────────────────────────────────────── */
   // Initialize game state with starter team from coin flip result and unique match ID
   const [gs, disp]           = useReducer(reduce, undefined, () => ({
     ...initGS(`room-${roomCode}`), // Use roomCode as base for match ID for consistency
-    turn: 1 as Team, // Default to team 1, will sync from other player
-    coinFlipResult: 1 as Team, // Default, will sync from other player
+    turn: starterTeam as Team, // Use the starter team from coin flip result
+    coinFlipResult: starterTeam as Team, // Use the starter team from coin flip result
   }))
   const [selId, setSel]      = useState<string | null>(null)
   const [moves, setMoves]    = useState<Set<string>>(new Set())

@@ -93,11 +93,13 @@ const MagicalCoin = React.memo(function MagicalCoin({
       
       if (coinRef.current) {
         const baseRotations = 4
+        // result === 1 (Purple) = 0 rotation (front face), result === 2 (Yellow) = 180 rotation (back face)
         const totalRotation = baseRotations * 360 + (result === 2 ? 180 : 0)
         const currentRotation = eased * totalRotation
         const lift = Math.sin(eased * Math.PI) * 100
         
         coinRef.current.style.transform = `translateY(-${lift}px) rotateY(${currentRotation}deg)`
+        console.log('[COIN] Rotation:', currentRotation, 'Target result:', result === 1 ? 'PURPLE' : 'YELLOW')
       }
       
       if (progress < 1) {
@@ -250,6 +252,7 @@ export default function RoomPage() {
         
         // Use server-side authoritative random starter (50/50)
         const serverStarter: 1 | 2 = data?.starting_team ?? 1
+        console.log('[COIN FLIP] Server returned starting_team:', serverStarter, '(1=Purple, 2=Yellow)')
         setCoinFlipResult(serverStarter)
 
         // Broadcast coin flip result to all clients via realtime
@@ -291,6 +294,7 @@ export default function RoomPage() {
             
             // Navigate to game with starter parameter from coin flip result
             const finalStarter = coinFlipResult || syncedCoinResult || 1
+            console.log('[NAVIGATE] Going to game with starter:', finalStarter, '(1=Purple, 2=Yellow)')
             router.push(`/game/${roomCode}?team=${myTeamNumber}&t1=${encodeURIComponent(t1Name)}&t2=${encodeURIComponent(t2Name)}&captain=${amICaptain}&starter=${finalStarter}`)
           }, 1000)  // Short delay after fadeout
         }, 500)  // Fadeout duration
@@ -328,6 +332,7 @@ export default function RoomPage() {
               const amICaptain = isSoloMode || myTeam?.captain_id === profile?.id
 
               const finalStarter = syncedCoinResult || coinFlipResult || 1
+              console.log('[NAVIGATE SYNCED] Going to game with starter:', finalStarter, '(1=Purple, 2=Yellow)')
               router.push(`/game/${roomCode}?team=${myTeamNumber}&t1=${encodeURIComponent(t1Name)}&t2=${encodeURIComponent(t2Name)}&captain=${amICaptain}&starter=${finalStarter}`)
             }, 1000)
           }, 500)
