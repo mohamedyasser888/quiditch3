@@ -1,43 +1,7 @@
--- Persistent, mode-specific player records. Team objects belong to a single
--- room, so team-mode rankings aggregate each player's team-match results.
-CREATE TABLE IF NOT EXISTS player_game_stats (
-  user_id UUID REFERENCES profiles(id) ON DELETE CASCADE NOT NULL,
-  mode TEXT NOT NULL CHECK (mode IN ('solo', 'team')),
-  matches INTEGER NOT NULL DEFAULT 0 CHECK (matches >= 0),
-  wins INTEGER NOT NULL DEFAULT 0 CHECK (wins >= 0),
-  losses INTEGER NOT NULL DEFAULT 0 CHECK (losses >= 0),
-  total_score INTEGER NOT NULL DEFAULT 0 CHECK (total_score >= 0),
-  total_saves INTEGER NOT NULL DEFAULT 0 CHECK (total_saves >= 0),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc', now()),
-  PRIMARY KEY (user_id, mode)
-);
+-- Add snitch_team column to match_results table for tracking which team caught the Snitch
+ALTER TABLE match_results ADD COLUMN IF NOT EXISTS snitch_team INTEGER CHECK (snitch_team IN (1, 2));
 
-CREATE TABLE IF NOT EXISTS match_results (
-  room_id UUID PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
-  mode TEXT NOT NULL CHECK (mode IN ('solo', 'team')),
-  winner_team INTEGER NOT NULL CHECK (winner_team IN (1, 2)),
-  team1_score INTEGER NOT NULL DEFAULT 0,
-  team2_score INTEGER NOT NULL DEFAULT 0,
-  team1_saves INTEGER NOT NULL DEFAULT 0,
-  team2_saves INTEGER NOT NULL DEFAULT 0,
-  snitch_team INTEGER CHECK (snitch_team IN (1, 2)),
-  finished_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc', now())
-);
-
-ALTER TABLE player_game_stats ENABLE ROW LEVEL SECURITY;
-ALTER TABLE match_results ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "Authenticated users can view player game stats" ON player_game_stats;
-CREATE POLICY "Authenticated users can view player game stats"
-  ON player_game_stats FOR SELECT TO authenticated USING (true);
-DROP POLICY IF EXISTS "Authenticated users can view match results" ON match_results;
-CREATE POLICY "Authenticated users can view match results"
-  ON match_results FOR SELECT TO authenticated USING (true);
-
-CREATE INDEX IF NOT EXISTS idx_player_game_stats_mode_rank
-  ON player_game_stats (mode, wins DESC, total_score DESC, total_saves DESC);
-
--- One RPC writes the result once even if both game clients finish together.
+-- Update the record_match_result function to accept snitch_team parameter
 CREATE OR REPLACE FUNCTION record_match_result(
   p_room_code TEXT,
   p_winner_team INTEGER,
@@ -97,11 +61,6 @@ BEGIN
 END;
 $$;
 
+-- Revoke old permission and grant new one
+REVOKE EXECUTE ON FUNCTION record_match_result(TEXT, INTEGER, INTEGER, INTEGER, INTEGER, INTEGER) FROM authenticated;
 GRANT EXECUTE ON FUNCTION record_match_result(TEXT, INTEGER, INTEGER, INTEGER, INTEGER, INTEGER, INTEGER) TO authenticated;
-
-DO $$
-BEGIN
-  ALTER PUBLICATION supabase_realtime ADD TABLE player_game_stats;
-EXCEPTION WHEN duplicate_object THEN NULL;
-END;
-$$;

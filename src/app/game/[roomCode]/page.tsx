@@ -146,7 +146,7 @@ const MAX: Record<PieceType, number> = { GK: 1, D: 2, A: 3, S: 1 }
 const BROOM_LIMITS: Record<BroomSpeed, number> = { 0: 1, 1: 1, 2: 2, 3: 2, 4: 1 }
 const ASSIGNABLE_SPEEDS: BroomSpeed[] = [1, 2, 3, 4]
 const MAX_PIECES_PER_CELL = 5
-const SNITCH_SPAWN_AFTER_MOVES = 4
+const SNITCH_SPAWN_AFTER_MOVES = 4 // Snitch spawns after 4 total moves (2 complete turns - each team moves twice)
 const FIELD_SQUARES = COLS.flatMap(col =>
   Array.from({ length: 5 }, (_, index) => `${col}${index + 1}`)
 )
@@ -180,16 +180,17 @@ function initGS(matchId?: string): GS {
       { id: 't1-gk', team: 1, type: 'GK', col: T1_GK.col, row: T1_GK.row, broomSpeed: 0 },
       { id: 't2-gk', team: 2, type: 'GK', col: T2_GK.col, row: T2_GK.row, broomSpeed: 0 },
     ],
-    turn: 1, s1: 0, s2: 0, saves1: 0, saves2: 0, streak1: 0, streak2: 0, streakBonusTeam: null, duel: null, combat: null, d1: false, d2: false,
+    turn: 1 as Team, s1: 0, s2: 0, saves1: 0, saves2: 0, streak1: 0, streak2: 0, streakBonusTeam: null, duel: null, combat: null, d1: false, d2: false,
     turnCount:     0,
     snitchPos:     null,
     snitchPhase:   null,
+    snitchHiddenMoves: 0, // Initialize hidden move counter to 0 for fresh matches
     bludger:       null,
     revision:      0,
     starterPhase:  null,
     matchId:       matchId || `room-${Date.now()}`, // Use room-based match ID for consistency
     coinFlipStatus: 'completed', // Coin flip already happened in room lobby
-    coinFlipResult: 1, // Default, will be overridden by URL param
+    coinFlipResult: 1 as Team, // Default, will be overridden by URL param
   }
 }
 
@@ -464,7 +465,7 @@ function completeTurn(s: GS, patch: Partial<GS>): GS {
 function progressAfterMove(s: GS, _movedPiece?: Piece) {
   const turnCount = s.turnCount + 1
   const hiddenMoves = s.snitchPhase === 'hiding' ? (s.snitchHiddenMoves ?? 0) + 1 : s.snitchHiddenMoves
-  const snitchReadyToReturn = s.snitchPhase === 'hiding' && hiddenMoves !== undefined && hiddenMoves >= 2
+  const snitchReadyToReturn = s.snitchPhase === 'hiding' && hiddenMoves !== undefined && hiddenMoves >= 4
 
   if (snitchReadyToReturn) {
     return {
@@ -481,7 +482,7 @@ function progressAfterMove(s: GS, _movedPiece?: Piece) {
     turnCount,
     snitchHiddenMoves: hiddenMoves,
     snitchPhase:
-      s.snitchPhase === null && turnCount === SNITCH_SPAWN_AFTER_MOVES
+      s.snitchPhase === null && turnCount >= SNITCH_SPAWN_AFTER_MOVES
         ? 'appearing' as const
         : s.snitchPhase,
   }
@@ -943,30 +944,61 @@ function reduce(s: GS, a: Act): GS {
       
       if (s.snitchOutcome === 'hold') {
         if (s.snitchWheelContext === 'return') {
-          // Second wheel result: تثبت - return to hidden square
-          return {
-            ...s,
-            snitchPhase: 'active',
-            snitchHiddenMoves: 0,
-            snitchPos: s.snitchHiddenSquare || s.snitchPos, // Return to hidden square
-            snitchHiddenSquare: undefined,
-            snitchWheelContext: undefined,
-            snitchEventId: eventId,
+          // Second wheel result: تثبت - check if seekers are on the snitch
+          const returnPos = s.snitchHiddenSquare || s.snitchPos
+          const seekersOnReturn = returnPos ? s.pieces.filter(piece =>
+            piece.type === 'S' && piece.col === returnPos.col && piece.row === returnPos.row
+          ) : []
+
+          if (seekersOnReturn.length === 0) {
+            // No seekers on return position - just return snitch to hidden square
+            return {
+              ...s,
+              snitchPhase: 'active',
+              snitchHiddenMoves: 0,
+              snitchPos: returnPos,
+              snitchHiddenSquare: undefined,
+              snitchWheelContext: undefined,
+              snitchEventId: eventId,
+            }
+          } else if (seekersOnReturn.length === 1) {
+            // Single seeker on return position - they catch the snitch and get 50 points
+            const seeker = seekersOnReturn[0]
+            return {
+              ...s, phase: 'finished', duel: null, combat: null,
+              s1: seeker.team === 1 ? s.s1 + 50 : s.s1,
+              s2: seeker.team === 2 ? s.s2 + 50 : s.s2,
+              snitchPhase: 'caught',
+              snitchCatchWinnerId: seeker.id,
+              snitchEventId: eventId,
+            }
+          } else {
+            // Multiple seekers on return position - trigger catch-off wheel based on broom speed
+            return {
+              ...s,
+              snitchPhase: 'catching',
+              snitchCatchLabels: undefined,
+              snitchCatchAngle: undefined,
+              snitchCatchWinnerId: undefined,
+              snitchEventId: eventId,
+            }
           }
         }
+        // First wheel result: تثبت - check if seekers are on the snitch position
         const seekers = seekersOnSnitch(s.pieces, s.snitchPos)
         if (seekers.length === 0) return { ...s, snitchPhase: 'active' }
         if (seekers.length > 1) {
-          // Multiple seekers - trigger catch-off wheel to determine winner
+          // Multiple seekers - trigger catch-off wheel to determine winner based on broom speed
           return { ...s, snitchPhase: 'catching', snitchCatchLabels: undefined, snitchCatchAngle: undefined, snitchCatchWinnerId: undefined, snitchEventId: eventId }
         }
-        // Single seeker - they catch the snitch
+        // Single seeker - they catch the snitch and get 50 points, game ends
         const seeker = seekers[0]
         return {
           ...s, phase: 'finished', duel: null, combat: null,
           s1: seeker.team === 1 ? s.s1 + 50 : s.s1,
           s2: seeker.team === 2 ? s.s2 + 50 : s.s2,
           snitchPhase: 'caught',
+          snitchCatchWinnerId: seeker.id,
           snitchEventId: eventId,
         }
       }
@@ -1343,9 +1375,14 @@ function CombatWheel({
             <text key={`t${i}`} x={s.lx} y={s.ly}
               textAnchor="middle" alignmentBaseline="middle"
               fontSize={deg >= 60 ? 26 : deg >= 40 ? 20 : 14}
-              fontWeight="900" fill="white"
+              fontWeight="700" fill="white"
+              fontFamily="'Inter', 'Segoe UI', 'Roboto', 'Helvetica Neue', 'Arial', sans-serif"
               transform={`rotate(${s.mid - 90} ${s.lx} ${s.ly})`}
-              style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.9))' }}
+              style={{ 
+                filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.9))',
+                textShadow: '0 0 12px rgba(255,255,255,0.25)',
+                letterSpacing: '0.02em'
+              }}
             >
               {s.type === 'atk' ? 'ATK' : 'DEF'}
             </text>
@@ -1468,36 +1505,53 @@ const SnitchWheel = React.memo(function SnitchWheel({
   squares,
   spinAngle,
   spinning,
+  smallerFont = false,
 }: {
   squares: string[]
   spinAngle: number
   spinning: boolean
+  smallerFont?: boolean
 }) {
+  // Check if this is a placement wheel (has position names like "A1", "B2", etc.)
+  const isPlacementWheel = squares.length > 0 && /^[A-Z]\d+$/.test(squares[0])
   const svgRef = useRef<SVGSVGElement>(null)
 
   useEffect(() => {
     if (!spinning || spinAngle <= 0) return
-    const duration = WHEEL_SPIN_DURATION_MS
+    const duration = 10000 // Same duration as CombatWheel
     const startTime = performance.now()
     let raf: number
-
-    const frame = (now: number) => {
+    function ease(t: number): number {
+      const x1 = 0.18, y1 = 0.98, x2 = 0.28, y2 = 1
+      const cx3 = 3 * x1, bx3 = 3 * (x2 - x1) - cx3, ax3 = 1 - cx3 - bx3
+      const cy3 = 3 * y1, by3 = 3 * (y2 - y1) - cy3, ay3 = 1 - cy3 - by3
+      let u = t
+      for (let i = 0; i < 8; i++) {
+        const xErr = ((ax3 * u + bx3) * u + cx3) * u - t
+        const dxDu = (3 * ax3 * u + 2 * bx3) * u + cx3
+        if (Math.abs(dxDu) < 1e-6) break
+        u -= xErr / dxDu
+      }
+      return ((ay3 * u + by3) * u + cy3) * u
+    }
+    function frame(now: number) {
       const progress = Math.min((now - startTime) / duration, 1)
       if (svgRef.current) {
-        const rotation = wheelSpinEase(progress) * spinAngle
-        svgRef.current.style.transform = `rotate(${rotation}deg)`
+        svgRef.current.style.transform = `rotate(${ease(progress) * spinAngle}deg)`
         svgRef.current.style.transformOrigin = '200px 200px'
       }
       if (progress < 1) raf = requestAnimationFrame(frame)
     }
     raf = requestAnimationFrame(frame)
     return () => cancelAnimationFrame(raf)
-  }, [spinAngle, spinning])
+  }, [spinning, spinAngle])
 
   if (!squares || squares.length === 0) return null
-  const total = squares.length   // 20
+  const total = squares.length
   const deg   = 360 / total
-  const R = 175, cx = 200, cy = 200
+  // Adjust radius for 3-item wheels to prevent Arabic text overflow
+  const R = total === 3 ? 135 : 175
+  const cx = 200, cy = 200
 
   const pt = (a: number) => ({
     x: cx + R * Math.sin((a * Math.PI) / 180),
@@ -1507,9 +1561,10 @@ const SnitchWheel = React.memo(function SnitchWheel({
   const slices = squares.map((label, i) => {
     const start = i * deg, end = (i + 1) * deg
     const s = pt(start), e = pt(end)
-    const path = `M ${cx} ${cy} L ${s.x.toFixed(2)} ${s.y.toFixed(2)} A ${R} ${R} 0 0 1 ${e.x.toFixed(2)} ${e.y.toFixed(2)} Z`
+    const path = `M ${cx} ${cy} L ${s.x.toFixed(2)} ${s.y.toFixed(2)} A ${R} ${R} 0 ${deg > 180 ? 1 : 0} 1 ${e.x.toFixed(2)} ${e.y.toFixed(2)} Z`
     const mid  = start + deg / 2
-    const lr   = R * 0.68
+    // Adjust label radius based on wheel size to prevent overflow
+    const lr   = total === 3 ? R * 0.55 : R * 0.68
     return { label, path, lx: cx + lr * Math.sin((mid * Math.PI) / 180), ly: cy - lr * Math.cos((mid * Math.PI) / 180), mid }
   })
 
@@ -1517,35 +1572,49 @@ const SnitchWheel = React.memo(function SnitchWheel({
   const goldPalette = ['#f59e0b', '#d97706', '#b45309', '#92400e', '#78350f']
 
   const svgStyle: React.CSSProperties = spinning
-    ? { transformOrigin: '200px 200px', filter: 'drop-shadow(0 0 20px rgba(251,191,36,0.4))' }
-    : { transformOrigin: '200px 200px', animation: 'wheel-idle-spin 6s linear infinite', filter: 'drop-shadow(0 0 10px rgba(251,191,36,0.2))' }
+    ? { transformOrigin: '200px 200px' }
+    : { transformOrigin: '200px 200px', animation: 'wheel-idle-spin 3s linear infinite' }
 
   return (
-    <div className="relative mx-auto mb-4 transition-all duration-300" style={{ width: 400, height: 400 }}>
-      {spinning && (
-        <div className="absolute inset-0 rounded-full bg-amber-500/10 animate-pulse blur-xl" />
-      )}
-      <svg ref={svgRef} width={400} height={400} viewBox="0 0 400 400" style={svgStyle} className="transition-all duration-300">
-        <circle cx={cx} cy={cy} r={R+8} fill="none" stroke="rgba(251,191,36,0.15)" strokeWidth={16} />
+    <div className="relative mx-auto mb-4" style={{ width: 400, height: 400 }}>
+      <style>{`
+        @keyframes wheel-idle-spin {
+          from { transform: rotate(0deg); }
+          to   { transform: rotate(360deg); }
+        }
+      `}</style>
+
+      <svg ref={svgRef} width={400} height={400} viewBox="0 0 400 400" style={svgStyle}>
+        <circle cx={cx} cy={cy} r={R + 8} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth={16} />
+
         {slices.map((s, i) => (
           <path key={i} d={s.path}
             fill={goldPalette[i % goldPalette.length]}
             opacity={0.85 + (i % 2) * 0.1}
-            stroke="#1e293b" strokeWidth={2}
-            className="transition-all duration-150"
+            stroke="#1e293b" strokeWidth={3}
           />
         ))}
-        {slices.map((s, i) => (
-          <text key={`t${i}`} x={s.lx} y={s.ly}
-            textAnchor="middle" alignmentBaseline="middle"
-            fontSize={squares.length <= 4 ? 26 : 10} fontWeight="800" fill="white"
-            transform={`rotate(${s.mid - 90} ${s.lx} ${s.ly})`}
-            style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,1))' }}
-          >
-            {s.label}
-          </text>
-        ))}
-        {/* Snitch icon centre - pulsing when spinning */}
+
+        {slices.map((s, i) => {
+          return (
+            <text key={`t${i}`} x={s.lx} y={s.ly}
+              textAnchor="middle" alignmentBaseline="middle"
+              fontSize={isPlacementWheel ? (deg >= 60 ? 26 : deg >= 40 ? 20 : deg >= 20 ? 12 : 10) : (smallerFont ? 24 : 30)}
+              fontWeight="700" fill="white"
+              fontFamily="'Inter', 'Segoe UI', 'Roboto', 'Helvetica Neue', 'Arial', sans-serif"
+              transform={`rotate(${s.mid - 90} ${s.lx} ${s.ly})`}
+              style={{ 
+                filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.9))',
+                textShadow: '0 0 12px rgba(255,255,255,0.25)',
+                letterSpacing: '0.02em',
+                wordSpacing: '0.1em'
+              }}
+            >
+              {s.label}
+            </text>
+          )
+        })}
+
         <circle cx={cx} cy={cy} r={26} fill="#fbbf24" className={spinning ? 'animate-pulse' : ''} />
         <image href="/snitch.png" x={cx-18} y={cy-18} width={36} height={36} style={{ filter: 'drop-shadow(0 0 6px #f59e0b)' }} />
       </svg>
@@ -1808,8 +1877,8 @@ export default function GamePage() {
   // Initialize game state with starter team from coin flip result and unique match ID
   const [gs, disp]           = useReducer(reduce, undefined, () => ({
     ...initGS(`room-${roomCode}`), // Use roomCode as base for match ID for consistency
-    turn: 1, // Default to team 1, will sync from other player
-    coinFlipResult: 1, // Default, will sync from other player
+    turn: 1 as Team, // Default to team 1, will sync from other player
+    coinFlipResult: 1 as Team, // Default, will sync from other player
   }))
   const [selId, setSel]      = useState<string | null>(null)
   const [moves, setMoves]    = useState<Set<string>>(new Set())
@@ -1876,7 +1945,7 @@ export default function GamePage() {
     chRef.current?.send({ type: 'broadcast', event: 'g', payload: a })
 
     // Save important actions to database for persistence
-    const shouldSave = a.kind === 'PLACE' || a.kind === 'DDONE' || a.kind === 'MOVE' || a.kind === 'DRESET' || a.kind === 'ATTACKER_CHOICE' || a.kind === 'ATTACKER_SHOOT' || a.kind === 'COMBAT_RESOLVE' || a.kind === 'COMBAT_REVEAL_COMPLETE' || a.kind === 'END_BONUS_TURN' || a.kind === 'SEEKER_CONTINUE' || a.kind === 'SNITCH_SYNC_WAIT' || a.kind === 'SNITCH_TRIGGER_ENCOUNTER' || a.kind === 'SNITCH_OUTCOME_SPIN' || a.kind === 'SNITCH_OUTCOME_RESOLVE' || a.kind === 'SNITCH_LAND'
+    const shouldSave = a.kind === 'PLACE' || a.kind === 'DDONE' || a.kind === 'MOVE' || a.kind === 'DRESET' || a.kind === 'ATTACKER_CHOICE' || a.kind === 'ATTACKER_SHOOT' || a.kind === 'COMBAT_SPIN' || a.kind === 'COMBAT_RESOLVE' || a.kind === 'COMBAT_REVEAL_COMPLETE' || a.kind === 'END_BONUS_TURN' || a.kind === 'SEEKER_CONTINUE' || a.kind === 'SNITCH_SYNC_WAIT' || a.kind === 'SNITCH_TRIGGER_ENCOUNTER' || a.kind === 'SNITCH_OUTCOME_SPIN' || a.kind === 'SNITCH_OUTCOME_RESOLVE' || a.kind === 'SNITCH_LAND'
     if (shouldSave && (nextState.revision ?? 0) > expectedRevision) {
       void (async () => {
         const { error } = await supabase.rpc('save_quidditch_game_state', {
@@ -2062,13 +2131,32 @@ export default function GamePage() {
   useEffect(() => {
     if (gs.snitchPhase !== 'appearing' || myTeam !== 1) return
     const t = setTimeout(() => {
+      const live = gsRef.current
+      // Double-check phase hasn't changed
+      if (live.snitchPhase !== 'appearing') {
+        console.log('[SNITCH] Phase changed, aborting')
+        return
+      }
+      // Wait for combat or duel to finish before triggering Snitch wheel
+      if (live.combat?.phase || live.combat || live.duel?.phase || live.duel) {
+        console.log('[SNITCH] Waiting for combat/duel to finish before triggering wheel')
+        return
+      }
       // A moving Snitch can never be sent back to the square it just left.
-      const currentSquare = gsRef.current.snitchPos
-        ? `${gsRef.current.snitchPos.col}${gsRef.current.snitchPos.row}`
+      const currentSquare = live.snitchPos
+        ? `${live.snitchPos.col}${live.snitchPos.row}`
         : null
       const squares = shuffleSquares().filter(square => square !== currentSquare)
+      if (squares.length === 0) {
+        console.log('[SNITCH] No available squares to spawn snitch')
+        return
+      }
       const chosenIdx = randomIndex(squares.length)
       const targetSq = squares[chosenIdx]
+      if (!targetSq) {
+        console.log('[SNITCH] Failed to select target square')
+        return
+      }
       emit({
         kind: 'SNITCH_SPIN',
         squares,
@@ -2101,9 +2189,14 @@ export default function GamePage() {
   // Team 1 hosts: emit SNITCH_LAND after animation completes
   useEffect(() => {
     if (gs.snitchPhase !== 'spinning' || myTeam !== 1) return
-    const t = setTimeout(() => emit({ kind: 'SNITCH_LAND' }), WHEEL_SPIN_DURATION_MS)
+    // Wait for combat to finish before proceeding - comprehensive check
+    if (gs.combat?.phase || gs.combat) {
+      console.log('[SNITCH] Waiting for combat to finish before SNITCH_LAND')
+      return
+    }
+    const t = setTimeout(() => emit({ kind: 'SNITCH_LAND' }), 10200) // Same timing as CombatWheel
     return () => clearTimeout(t)
-  }, [gs.snitchPhase, myTeam, emit])
+  }, [gs.snitchPhase, gs.combat, myTeam, emit])
 
   /* ── Snitch encounter: Team 1 syncs wait state and promotes ready → encounter ── */
   useEffect(() => {
@@ -2152,9 +2245,14 @@ export default function GamePage() {
 
   useEffect(() => {
     if (gs.snitchPhase !== 'encounter' || gs.snitchOutcomeAngle === undefined || myTeam !== 1) return
-    const t = setTimeout(() => emit({ kind: 'SNITCH_OUTCOME_RESOLVE' }), WHEEL_SPIN_DURATION_MS)
+    // Wait for combat to finish before proceeding - comprehensive check
+    if (gs.combat?.phase || gs.combat) {
+      console.log('[SNITCH] Waiting for combat to finish before SNITCH_OUTCOME_RESOLVE')
+      return
+    }
+    const t = setTimeout(() => emit({ kind: 'SNITCH_OUTCOME_RESOLVE' }), 10200) // Same timing as CombatWheel
     return () => clearTimeout(t)
-  }, [gs.snitchPhase, gs.snitchOutcomeAngle, myTeam, emit])
+  }, [gs.snitchPhase, gs.snitchOutcomeAngle, gs.combat, myTeam, emit])
 
   /* A held Snitch shared by both Seekers gets a speed-weighted catch wheel. */
   useEffect(() => {
@@ -2194,9 +2292,14 @@ export default function GamePage() {
 
   useEffect(() => {
     if (gs.snitchPhase !== 'catching' || gs.snitchCatchAngle === undefined || myTeam !== 1) return
-    const t = setTimeout(() => emit({ kind: 'SNITCH_CATCH_RESOLVE' }), 8500)
+    // Wait for combat to finish before proceeding - comprehensive check
+    if (gs.combat?.phase || gs.combat) {
+      console.log('[SNITCH] Waiting for combat to finish before SNITCH_CATCH_RESOLVE')
+      return
+    }
+    const t = setTimeout(() => emit({ kind: 'SNITCH_CATCH_RESOLVE' }), 10200) // Same timing as CombatWheel
     return () => clearTimeout(t)
-  }, [gs.snitchPhase, gs.snitchCatchAngle, myTeam, emit])
+  }, [gs.snitchPhase, gs.snitchCatchAngle, gs.combat, myTeam, emit])
 
   useEffect(() => {
     if (gs.snitchPhase !== 'caught' || matchRecordStatus === 'saving' || matchRecordStatus === 'error') return
@@ -2229,12 +2332,13 @@ export default function GamePage() {
         return
       }
 
+      console.error('[MATCH RECORD] Failed to save match result:', error)
       matchRecordRef.current = false
       setMatchRecordStatus('error')
       setMatchRecordError(
         error.message.includes('record_match_result')
           ? 'Game database needs to be updated. Please contact the administrator to apply the latest updates.'
-          : 'Could not save match results. Your game progress is safe, but stats may not be recorded. Please check your internet connection.'
+          : `Could not save match results: ${error.message}. Your game progress is safe, but stats may not be recorded.`
       )
     })
   }, [gs.phase, gs.s1, gs.s2, gs.saves1, gs.saves2, isCaptain, roomCode, matchRecordAttempt]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -3239,7 +3343,7 @@ export default function GamePage() {
       })()}
 
       {gs.combat && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-xl">
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/90 backdrop-blur-xl">
           <div className="text-center px-8 max-w-3xl w-full">
             {(gs.combat.phase === 'spinning' || gs.combat.phase === 'spinning_anim') && (
               <>
@@ -3423,7 +3527,7 @@ export default function GamePage() {
           SNITCH OVERLAYS
       ═══════════════════════════════════════════════════════════════════ */}
       {(gs.snitchPhase === 'appearing' || gs.snitchPhase === 'spinning') && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-amber-950/90 backdrop-blur-md">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-amber-950/95 backdrop-blur-xl">
           <div className="text-center w-full px-4">
             {gs.snitchPhase === 'appearing' ? (
               <h1 className="text-5xl md:text-6xl font-serif italic font-black text-amber-300 drop-shadow-[0_0_40px_rgba(251,191,36,0.8)] animate-pulse tracking-wide">
@@ -3447,7 +3551,7 @@ export default function GamePage() {
       )}
 
       {gs.snitchPhase === 'encounter' && (
-        <div className="fixed inset-0 z-[65] flex items-center justify-center bg-amber-950/90 backdrop-blur-md">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-amber-950/95 backdrop-blur-xl">
           <div className="text-center w-full px-4">
             <div className="animate-in fade-in zoom-in duration-500">
               <h2 className="text-4xl font-black text-amber-300 mb-2 drop-shadow-[0_0_20px_rgba(251,191,36,0.6)]" dir="rtl">
@@ -3467,7 +3571,7 @@ export default function GamePage() {
       )}
 
       {gs.snitchPhase === 'catching' && (
-        <div className="fixed inset-0 z-[65] flex items-center justify-center bg-amber-950/90 backdrop-blur-md">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-amber-950/95 backdrop-blur-xl">
           <div className="text-center w-full px-4 animate-in fade-in zoom-in duration-500">
             <h2 className="mb-2 text-4xl font-black text-amber-300 drop-shadow-[0_0_20px_rgba(251,191,36,0.6)]">SEEKER CATCH-OFF</h2>
             <p className="mb-5 text-amber-100/80">Each wheel slot equals one broom-speed point.</p>
