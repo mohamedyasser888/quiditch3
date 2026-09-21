@@ -960,22 +960,15 @@ function reduce(s: GS, a: Act): GS {
         return s
       }
       console.log('[SNITCH_SPIN] Transitioning from appearing to spinning with squares:', a.squares)
-      const snitchSpinState = { 
+      return { 
         ...s, 
-        snitchPhase: 'spinning', 
+        snitchPhase: 'spinning' as const, 
         snitchEncounterPending: false,
         snitchSquares: a.squares, 
         snitchAngle: a.angle, 
         snitchTarget: { col: a.col, row: a.row },
         revision: bumpRevision(s)
       }
-      console.log('[SNITCH_SPIN] New state:', {
-        phase: snitchSpinState.snitchPhase,
-        squares: snitchSpinState.snitchSquares,
-        angle: snitchSpinState.snitchAngle,
-        revision: snitchSpinState.revision
-      })
-      return snitchSpinState
 
     case 'SNITCH_LAND':
       if (s.snitchPhase !== 'spinning' || !s.snitchTarget) return s
