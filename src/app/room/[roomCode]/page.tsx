@@ -93,13 +93,16 @@ const MagicalCoin = React.memo(function MagicalCoin({
       
       if (coinRef.current) {
         const baseRotations = 4
-        // result === 1 (Purple) = 0 rotation (front face), result === 2 (Yellow) = 180 rotation (back face)
-        const totalRotation = baseRotations * 360 + (result === 2 ? 180 : 0)
+        // Front face (0°) = Purple, Back face (180°) = Yellow
+        // If result is 1 (Purple), land on 0°
+        // If result is 2 (Yellow), land on 180°
+        const targetRotation = result === 1 ? 0 : 180
+        const totalRotation = baseRotations * 360 + targetRotation
         const currentRotation = eased * totalRotation
         const lift = Math.sin(eased * Math.PI) * 100
         
         coinRef.current.style.transform = `translateY(-${lift}px) rotateY(${currentRotation}deg)`
-        console.log('[COIN] Progress:', progress.toFixed(2), 'Rotation:', currentRotation.toFixed(0), 'Target:', result === 1 ? 'PURPLE' : 'YELLOW')
+        console.log('[COIN] Progress:', progress.toFixed(2), 'Rotation:', currentRotation.toFixed(0), 'Target:', targetRotation, 'Result:', result, '(', result === 1 ? 'PURPLE' : 'YELLOW', ')', 'Will show:', currentRotation % 360 === 0 ? 'PURPLE' : 'YELLOW')
       }
       
       if (progress < 1) {
@@ -177,8 +180,8 @@ const MagicalCoin = React.memo(function MagicalCoin({
             <p className="text-xl text-slate-400 animate-pulse">
               Starting in 3 seconds...
             </p>
-            <div className="mt-4 text-sm text-slate-500">
-              DEBUG: result={result} ({result === 1 ? 'Purple/Team1' : 'Yellow/Team2'})
+            <div className="mt-4 text-xs text-slate-600">
+              Coin result: {result} ({result === 1 ? 'Purple (Team 1)' : 'Yellow (Team 2)'})
             </div>
           </div>
         )}
@@ -257,7 +260,11 @@ export default function RoomPage() {
         const serverStarter: 1 | 2 = data?.starting_team ?? 1
         console.log('[COIN FLIP] Server returned starting_team:', serverStarter, '(1=Purple, 2=Yellow)')
         console.log('[COIN FLIP] Full data:', data)
-        setCoinFlipResult(serverStarter)
+        // TEMPORARY FIX: Invert the result to match the visual
+        // Remove this once the server logic is fixed
+        const correctedStarter = serverStarter === 1 ? 2 : 1
+        console.log('[COIN FLIP] Using corrected starter:', correctedStarter, '(inverted from server)')
+        setCoinFlipResult(correctedStarter)
 
         // Broadcast coin flip result to all clients via realtime
         const channelName = `room:${roomCode}-${Math.random()}`
@@ -299,6 +306,7 @@ export default function RoomPage() {
             // Navigate to game with starter parameter from coin flip result
             const finalStarter = coinFlipResult || syncedCoinResult || 1
             console.log('[NAVIGATE] Going to game with starter:', finalStarter, '(1=Purple, 2=Yellow)')
+            console.log('[NAVIGATE] coinFlipResult:', coinFlipResult, 'syncedCoinResult:', syncedCoinResult)
             router.push(`/game/${roomCode}?team=${myTeamNumber}&t1=${encodeURIComponent(t1Name)}&t2=${encodeURIComponent(t2Name)}&captain=${amICaptain}&starter=${finalStarter}`)
           }, 1000)  // Short delay after fadeout
         }, 500)  // Fadeout duration
