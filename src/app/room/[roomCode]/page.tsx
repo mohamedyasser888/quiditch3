@@ -68,7 +68,7 @@ const MagicalCoin = React.memo(function MagicalCoin({
   React.useEffect(() => {
     if (!flipping) return
     
-    console.log('[COIN] Animation started, result:', result === 1 ? 'PURPLE' : 'YELLOW')
+    console.log('[COIN] Animation started, result:', result, '(', result === 1 ? 'PURPLE' : 'YELLOW', ')')
     
     const duration = 4000 // 4 seconds total
     const startTime = performance.now()
@@ -99,13 +99,13 @@ const MagicalCoin = React.memo(function MagicalCoin({
         const lift = Math.sin(eased * Math.PI) * 100
         
         coinRef.current.style.transform = `translateY(-${lift}px) rotateY(${currentRotation}deg)`
-        console.log('[COIN] Rotation:', currentRotation, 'Target result:', result === 1 ? 'PURPLE' : 'YELLOW')
+        console.log('[COIN] Progress:', progress.toFixed(2), 'Rotation:', currentRotation.toFixed(0), 'Target:', result === 1 ? 'PURPLE' : 'YELLOW')
       }
       
       if (progress < 1) {
         raf = requestAnimationFrame(frame)
       } else {
-        console.log('[COIN] Animation completed')
+        console.log('[COIN] Animation completed, showing result:', result === 1 ? 'PURPLE' : 'YELLOW')
         setShowResult(true)
       }
     }
@@ -177,6 +177,9 @@ const MagicalCoin = React.memo(function MagicalCoin({
             <p className="text-xl text-slate-400 animate-pulse">
               Starting in 3 seconds...
             </p>
+            <div className="mt-4 text-sm text-slate-500">
+              DEBUG: result={result} ({result === 1 ? 'Purple/Team1' : 'Yellow/Team2'})
+            </div>
           </div>
         )}
       </div>
@@ -253,6 +256,7 @@ export default function RoomPage() {
         // Use server-side authoritative random starter (50/50)
         const serverStarter: 1 | 2 = data?.starting_team ?? 1
         console.log('[COIN FLIP] Server returned starting_team:', serverStarter, '(1=Purple, 2=Yellow)')
+        console.log('[COIN FLIP] Full data:', data)
         setCoinFlipResult(serverStarter)
 
         // Broadcast coin flip result to all clients via realtime
