@@ -546,17 +546,17 @@ function reduce(s: GS, a: Act): GS {
         beforeCount: s.pieces.length,
         currentRevision: s.revision
       })
-      const newState = {
+      const placeState = {
         ...s,
         pieces: [...s.pieces, { id: a.id, team: a.team, type: a.pt, col: a.col, row: a.row, broomSpeed: 1 as BroomSpeed }],
         revision: (s.revision ?? 0) + 1,  // ← INCREMENT REVISION OPTIMISTICALLY
       }
       console.log('[REDUCER PLACE] After add:', {
-        afterCount: newState.pieces.length,
-        newPiece: newState.pieces[newState.pieces.length - 1],
-        newRevision: newState.revision
+        afterCount: placeState.pieces.length,
+        newPiece: placeState.pieces[placeState.pieces.length - 1],
+        newRevision: placeState.revision
       })
-      return newState
+      return placeState
 
     case 'DDONE': {
       const d1 = s.d1 || a.team === 1
@@ -960,7 +960,7 @@ function reduce(s: GS, a: Act): GS {
         return s
       }
       console.log('[SNITCH_SPIN] Transitioning from appearing to spinning with squares:', a.squares)
-      return { 
+      const snitchSpinState = { 
         ...s, 
         snitchPhase: 'spinning', 
         snitchEncounterPending: false,
@@ -969,6 +969,13 @@ function reduce(s: GS, a: Act): GS {
         snitchTarget: { col: a.col, row: a.row },
         revision: bumpRevision(s)
       }
+      console.log('[SNITCH_SPIN] New state:', {
+        phase: snitchSpinState.snitchPhase,
+        squares: snitchSpinState.snitchSquares,
+        angle: snitchSpinState.snitchAngle,
+        revision: snitchSpinState.revision
+      })
+      return snitchSpinState
 
     case 'SNITCH_LAND':
       if (s.snitchPhase !== 'spinning' || !s.snitchTarget) return s
@@ -2252,6 +2259,7 @@ export default function GamePage() {
   // Team 1 hosts: generate and broadcast the SNITCH_SPIN when 'appearing' starts
   useEffect(() => {
     if (gs.snitchPhase !== 'appearing' || myTeam !== 1) return
+    console.log('[SNITCH] Starting appearing phase timer for 1 second')
     const t = setTimeout(() => {
       const live = gsRef.current
       // Double-check phase hasn't changed
@@ -2287,7 +2295,7 @@ export default function GamePage() {
         col: targetSq[0] as Col,
         row: parseInt(targetSq[1])
       })
-    }, 1500) // Reduced from 2500ms to 1500ms for faster transition
+    }, 1000) // Reduced to 1 second for immediate transition
     return () => clearTimeout(t)
   }, [gs.snitchPhase, myTeam, emit])
 
@@ -2302,9 +2310,13 @@ export default function GamePage() {
     }
     if (gs.snitchPhase === 'spinning' && gs.snitchSquares && gs.snitchAngle !== undefined) {
       console.log('[SNITCH WHEEL SYNC] Starting wheel with squares:', gs.snitchSquares)
-      setSnitchSquares(gs.snitchSquares)
-      setSnitchSpin(gs.snitchAngle)
-      setSnitchSpinning(true)
+      // Force immediate update with a small delay to ensure React processes the state change
+      setTimeout(() => {
+        setSnitchSquares(gs.snitchSquares)
+        setSnitchSpin(gs.snitchAngle)
+        setSnitchSpinning(true)
+      }, 50)
+      return
     }
     if (gs.snitchPhase === 'active' || gs.snitchPhase === 'caught' || gs.snitchPhase === null) {
       setSnitchSpinning(false)
@@ -3782,28 +3794,31 @@ export default function GamePage() {
       {/* ═══════════════════════════════════════════════════════════════════
           SNITCH OVERLAYS
       ═══════════════════════════════════════════════════════════════════ */}
-      {(gs.snitchPhase === 'appearing' || gs.snitchPhase === 'spinning') && (
+      {gs.snitchPhase === 'appearing' && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-amber-950/95 backdrop-blur-xl">
           <div className="text-center w-full px-4 relative z-[10000]">
-            {gs.snitchPhase === 'appearing' ? (
-              <div className="animate-in fade-in duration-500">
-                <h1 className="text-5xl md:text-6xl font-serif italic font-black text-amber-300 drop-shadow-[0_0_40px_rgba(251,191,36,0.8)] animate-pulse tracking-wide">
-                  ✨ The Snitch Has Chosen to Appear ✨
-                </h1>
-              </div>
-            ) : (
-              /* spinning phase — squares are guaranteed ready */
-              <div className="animate-in fade-in zoom-in duration-700">
-                <h2 className="text-3xl font-black text-amber-300 mb-4 drop-shadow-[0_0_20px_rgba(251,191,36,0.6)]">
-                  Where will it land?
-                </h2>
-                <SnitchWheel
-                  squares={snitchSquares.length > 0 ? snitchSquares : (gs.snitchSquares ?? [])}
-                  spinAngle={snitchSpinAngle}
-                  spinning={snitchSpinning}
-                />
-              </div>
-            )}
+            <div className="animate-in fade-in duration-500">
+              <h1 className="text-5xl md:text-6xl font-serif italic font-black text-amber-300 drop-shadow-[0_0_40px_rgba(251,191,36,0.8)] animate-pulse tracking-wide">
+                ✨ The Snitch Has Chosen to Appear ✨
+              </h1>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {gs.snitchPhase === 'spinning' && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-amber-950/95 backdrop-blur-xl">
+          <div className="text-center w-full px-4 relative z-[10000]">
+            <div className="animate-in fade-in zoom-in duration-300">
+              <h2 className="text-3xl font-black text-amber-300 mb-4 drop-shadow-[0_0_20px_rgba(251,191,36,0.6)]">
+                Where will it land?
+              </h2>
+              <SnitchWheel
+                squares={snitchSquares.length > 0 ? snitchSquares : (gs.snitchSquares ?? [])}
+                spinAngle={snitchSpinAngle}
+                spinning={snitchSpinning}
+              />
+            </div>
           </div>
         </div>
       )}
