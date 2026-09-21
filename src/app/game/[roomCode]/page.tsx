@@ -2259,7 +2259,7 @@ export default function GamePage() {
   // Team 1 hosts: generate and broadcast the SNITCH_SPIN when 'appearing' starts
   useEffect(() => {
     if (gs.snitchPhase !== 'appearing' || myTeam !== 1) return
-    console.log('[SNITCH] Starting appearing phase timer for 1 second')
+    console.log('[SNITCH] Starting appearing phase timer for 800ms')
     const t = setTimeout(() => {
       const live = gsRef.current
       // Double-check phase hasn't changed
@@ -2278,7 +2278,27 @@ export default function GamePage() {
         : null
       const squares = shuffleSquares().filter(square => square !== currentSquare)
       if (squares.length === 0) {
-        console.log('[SNITCH] No available squares to spawn snitch')
+        console.log('[SNITCH] No available squares to spawn snitch, using all squares')
+        // Fallback: use all squares if filtered list is empty
+        const allSquares = shuffleSquares()
+        if (allSquares.length === 0) {
+          console.log('[SNITCH] ERROR: No squares available at all')
+          return
+        }
+        const chosenIdx = randomIndex(allSquares.length)
+        const targetSq = allSquares[chosenIdx]
+        if (!targetSq) {
+          console.log('[SNITCH] Failed to select target square from fallback')
+          return
+        }
+        console.log('[SNITCH] Emitting SNITCH_SPIN with fallback squares:', allSquares)
+        emit({
+          kind: 'SNITCH_SPIN',
+          squares: allSquares,
+          angle: computeWheelSpinAngle(allSquares.length, chosenIdx, 12),
+          col: targetSq[0] as Col,
+          row: parseInt(targetSq[1])
+        })
         return
       }
       const chosenIdx = randomIndex(squares.length)
@@ -2295,8 +2315,33 @@ export default function GamePage() {
         col: targetSq[0] as Col,
         row: parseInt(targetSq[1])
       })
-    }, 1000) // Reduced to 1 second for immediate transition
-    return () => clearTimeout(t)
+    }, 800) // Reduced to 800ms for faster transition
+    
+    // SAFETY FALLBACK: Force transition if stuck in appearing phase for too long
+    const safetyT = setTimeout(() => {
+      const live = gsRef.current
+      if (live.snitchPhase === 'appearing') {
+        console.log('[SNITCH] SAFETY: Still in appearing phase, forcing transition')
+        // Force a simple wheel with all squares
+        const allSquares = shuffleSquares()
+        const chosenIdx = randomIndex(allSquares.length)
+        const targetSq = allSquares[chosenIdx]
+        if (targetSq) {
+          emit({
+            kind: 'SNITCH_SPIN',
+            squares: allSquares,
+            angle: computeWheelSpinAngle(allSquares.length, chosenIdx, 12),
+            col: targetSq[0] as Col,
+            row: parseInt(targetSq[1])
+          })
+        }
+      }
+    }, 3000) // 3 second safety timeout
+    
+    return () => {
+      clearTimeout(t)
+      clearTimeout(safetyT)
+    }
   }, [gs.snitchPhase, myTeam, emit])
 
   // Sync local wheel state when SNITCH_SPIN lands in gs (both teams)
@@ -2680,15 +2725,15 @@ export default function GamePage() {
       table: 'quidditch_game_states',
       filter: `room_id=eq.${gameStateRoomId}`,
     }, (payload) => {
-      const newState = (payload.new as { game_state?: GS; revision?: number })
-      if (!newState?.game_state) return
+      const dbState = (payload.new as { game_state?: GS; revision?: number })
+      if (!dbState?.game_state) return
       
-      const incomingRevision = newState.revision ?? 0
+      const incomingRevision = dbState.revision ?? 0
       const currentRevision = gsRef.current.revision ?? 0
       
       // Only apply if incoming is newer
       if (incomingRevision > currentRevision) {
-        disp({ kind: 'SYNC', gs: { ...newState.game_state, revision: incomingRevision } })
+        disp({ kind: 'SYNC', gs: { ...dbState.game_state, revision: incomingRevision } })
       }
     })
 
@@ -3801,6 +3846,7 @@ export default function GamePage() {
               <h1 className="text-5xl md:text-6xl font-serif italic font-black text-amber-300 drop-shadow-[0_0_40px_rgba(251,191,36,0.8)] animate-pulse tracking-wide">
                 ✨ The Snitch Has Chosen to Appear ✨
               </h1>
+              <p className="text-amber-100/70 mt-4 text-sm animate-pulse">Preparing the wheel...</p>
             </div>
           </div>
         </div>
