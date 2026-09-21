@@ -494,19 +494,22 @@ function progressAfterMove(s: GS, movedPiece?: Piece) {
   const incrementTurnCount = movedPiece !== undefined
   const turnCount = incrementTurnCount ? s.turnCount + 1 : s.turnCount
   const hiddenMoves = s.snitchPhase === 'hiding' && incrementTurnCount ? (s.snitchHiddenMoves ?? 0) + 1 : s.snitchHiddenMoves
-  const snitchReadyToReturn = s.snitchPhase === 'hiding' && hiddenMoves !== undefined && hiddenMoves >= 4
+  const snitchReadyToReturn = s.snitchPhase === 'hiding' && hiddenMoves !== undefined && hiddenMoves === 4
 
   console.log('[PROGRESS AFTER MOVE]', {
     incrementTurnCount,
     previousTurnCount: s.turnCount,
     newTurnCount: turnCount,
     snitchPhase: s.snitchPhase,
+    snitchHiddenMoves: hiddenMoves,
+    snitchReadyToReturn,
     snitchSpawnThreshold: SNITCH_SPAWN_AFTER_MOVES,
-    shouldSpawn: s.snitchPhase === null && turnCount >= SNITCH_SPAWN_AFTER_MOVES,
+    shouldSpawn: s.snitchPhase === null && turnCount === SNITCH_SPAWN_AFTER_MOVES,
     movedPiece: movedPiece?.id
   })
 
   if (snitchReadyToReturn) {
+    console.log('[PROGRESS AFTER MOVE] Snitch ready to return after exactly 4 hidden moves')
     return {
       turnCount,
       snitchHiddenMoves: hiddenMoves,

@@ -33,6 +33,7 @@ DECLARE
   v_score INTEGER := 0;
   v_saves INTEGER := 0;
   v_team_matches INTEGER := 0;
+  v_total_achievements INTEGER := 0;
 BEGIN
   SELECT
     COALESCE(SUM(matches), 0),
@@ -62,11 +63,16 @@ BEGIN
     PERFORM unlock_achievement(p_user_id, 'Perfect Defense');
   END IF;
 
+  -- Count total achievements excluding Legendary Wizard
+  SELECT COUNT(*) INTO v_total_achievements
+  FROM achievements
+  WHERE name <> 'Legendary Wizard';
+
   -- Legendary Wizard is only awarded after every other seeded achievement.
   IF (SELECT COUNT(*) FROM user_achievements ua
       JOIN achievements a ON a.id = ua.achievement_id
       WHERE ua.user_id = p_user_id AND a.name <> 'Legendary Wizard')
-     >= (SELECT COUNT(*) FROM achievements WHERE name <> 'Legendary Wizard') THEN
+     >= v_total_achievements THEN
     PERFORM unlock_achievement(p_user_id, 'Legendary Wizard');
   END IF;
 END;
