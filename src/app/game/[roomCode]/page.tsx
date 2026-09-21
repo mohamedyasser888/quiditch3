@@ -517,7 +517,7 @@ function progressAfterMove(s: GS, movedPiece?: Piece) {
     }
   }
 
-  const shouldSpawn = s.snitchPhase === null && turnCount >= SNITCH_SPAWN_AFTER_MOVES
+  const shouldSpawn = s.snitchPhase === null && turnCount === SNITCH_SPAWN_AFTER_MOVES
   if (shouldSpawn) {
     console.log('[PROGRESS AFTER MOVE] TRIGGERING SNITCH APPEARANCE at turnCount:', turnCount)
   }
